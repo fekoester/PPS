@@ -1,0 +1,7 @@
+PPS
+tests/test_pps
+build/
+*.o
+frames/
+pps_step*.png
+__pycache__/
