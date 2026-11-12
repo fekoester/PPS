@@ -18,6 +18,8 @@
 
 #ifdef PPS_WITH_SFML
 #include <SFML/Graphics.hpp>
+#include <memory>
+#include <optional>
 #endif
 
 namespace {
@@ -159,47 +161,107 @@ sf::Color toSf(pps::Color c) {
     return sf::Color::White;
 }
 
+enum class Key { None, Close, Escape, Space, Right, Plus, Minus, R, S };
+
+// SFML 2 and SFML 3 have different event and key APIs; this maps both to Key.
+#if SFML_VERSION_MAJOR >= 3
+Key nextEvent(sf::RenderWindow &w, bool &any) {
+    any = false;
+    while (const std::optional<sf::Event> e = w.pollEvent()) {
+        any = true;
+        if (e->is<sf::Event::Closed>()) return Key::Close;
+        if (const auto *k = e->getIf<sf::Event::KeyPressed>()) {
+            switch (k->code) {
+                case sf::Keyboard::Key::Escape: return Key::Escape;
+                case sf::Keyboard::Key::Space: return Key::Space;
+                case sf::Keyboard::Key::Right: return Key::Right;
+                case sf::Keyboard::Key::Add: case sf::Keyboard::Key::Equal: return Key::Plus;
+                case sf::Keyboard::Key::Subtract: case sf::Keyboard::Key::Hyphen: return Key::Minus;
+                case sf::Keyboard::Key::R: return Key::R;
+                case sf::Keyboard::Key::S: return Key::S;
+                default: break;
+            }
+        }
+    }
+    return Key::None;
+}
+std::unique_ptr<sf::RenderWindow> makeWindow(unsigned W, unsigned H) {
+    return std::make_unique<sf::RenderWindow>(sf::VideoMode({W, H}), "Primordial Particle System");
+}
+void setXY(sf::Transformable &t, float x, float y, bool origin) { origin ? t.setOrigin({x, y}) : t.setPosition({x, y}); }
+bool screenshot(const sf::RenderWindow &w, const std::string &name) {
+    sf::Texture tex(w.getSize());
+    tex.update(w);
+    return tex.copyToImage().saveToFile(name);
+}
+#else
+Key nextEvent(sf::RenderWindow &w, bool &any) {
+    any = false;
+    sf::Event e;
+    while (w.pollEvent(e)) {
+        any = true;
+        if (e.type == sf::Event::Closed) return Key::Close;
+        if (e.type == sf::Event::KeyPressed) {
+            switch (e.key.code) {
+                case sf::Keyboard::Escape: return Key::Escape;
+                case sf::Keyboard::Space: return Key::Space;
+                case sf::Keyboard::Right: return Key::Right;
+                case sf::Keyboard::Add: case sf::Keyboard::Equal: return Key::Plus;
+                case sf::Keyboard::Subtract: case sf::Keyboard::Hyphen: return Key::Minus;
+                case sf::Keyboard::R: return Key::R;
+                case sf::Keyboard::S: return Key::S;
+                default: break;
+            }
+        }
+    }
+    return Key::None;
+}
+std::unique_ptr<sf::RenderWindow> makeWindow(unsigned W, unsigned H) {
+    return std::make_unique<sf::RenderWindow>(sf::VideoMode(W, H), "Primordial Particle System");
+}
+void setXY(sf::Transformable &t, float x, float y, bool origin) { origin ? t.setOrigin(x, y) : t.setPosition(x, y); }
+bool screenshot(const sf::RenderWindow &w, const std::string &name) {
+    sf::Texture tex;
+    tex.create(w.getSize().x, w.getSize().y);
+    tex.update(w);
+    return tex.copyToImage().saveToFile(name);
+}
+#endif
+
 int runViewer(Options o) {
     pps::Simulation sim = makeSim(o);
     sim.refreshNeighbourhoods();
     const unsigned W = (unsigned)std::lround(o.par.width * o.scale), H = (unsigned)std::lround(o.par.height * o.scale);
-    sf::RenderWindow window(sf::VideoMode(W, H), "Primordial Particle System");
+    std::unique_ptr<sf::RenderWindow> holder = makeWindow(W, H);
+    sf::RenderWindow &window = *holder;
     window.setFramerateLimit(60);
     sf::CircleShape dot(std::max(1.0f, (float)(0.5 * o.scale)));
-    dot.setOrigin(dot.getRadius(), dot.getRadius());
+    setXY(dot, dot.getRadius(), dot.getRadius(), true);
     bool paused = false;
     while (window.isOpen()) {
-        sf::Event e;
-        bool single = false;
-        while (window.pollEvent(e)) {
-            if (e.type == sf::Event::Closed) window.close();
-            if (e.type == sf::Event::KeyPressed) {
-                switch (e.key.code) {
-                    case sf::Keyboard::Escape: window.close(); break;
-                    case sf::Keyboard::Space: paused = !paused; break;
-                    case sf::Keyboard::Right: single = true; break;
-                    case sf::Keyboard::Add: case sf::Keyboard::Equal: o.stepsPerFrame++; break;
-                    case sf::Keyboard::Subtract: case sf::Keyboard::Hyphen:
-                        o.stepsPerFrame = std::max(1, o.stepsPerFrame - 1); break;
-                    case sf::Keyboard::R: o.seed++; sim = makeSim(o); sim.refreshNeighbourhoods(); break;
-                    case sf::Keyboard::S: {
-                        sf::Texture tex;
-                        tex.create(window.getSize().x, window.getSize().y);
-                        tex.update(window);
-                        const std::string name = "pps_step" + std::to_string(sim.stepCount) + ".png";
-                        tex.copyToImage().saveToFile(name);
-                        std::cout << "saved " << name << "\n";
-                        break;
-                    }
-                    default: break;
+        bool single = false, any = true;
+        while (any) {
+            switch (nextEvent(window, any)) {
+                case Key::Close: case Key::Escape: window.close(); break;
+                case Key::Space: paused = !paused; break;
+                case Key::Right: single = true; break;
+                case Key::Plus: o.stepsPerFrame++; break;
+                case Key::Minus: o.stepsPerFrame = std::max(1, o.stepsPerFrame - 1); break;
+                case Key::R: o.seed++; sim = makeSim(o); sim.refreshNeighbourhoods(); break;
+                case Key::S: {
+                    const std::string name = "pps_step" + std::to_string(sim.stepCount) + ".png";
+                    if (screenshot(window, name)) std::cout << "saved " << name << "\n";
+                    break;
                 }
+                case Key::None: break;
             }
         }
+        if (!window.isOpen()) break;
         if (!paused || single)
             for (int s = 0; s < (single ? 1 : o.stepsPerFrame); s++) sim.step();
         window.clear(sf::Color(10, 10, 20));
         for (std::size_t i = 0; i < sim.size(); i++) {
-            dot.setPosition((float)(sim.x[i] * o.scale), (float)(H - sim.y[i] * o.scale));  // y up
+            setXY(dot, (float)(sim.x[i] * o.scale), (float)(H - sim.y[i] * o.scale), false);  // y up
             dot.setFillColor(toSf(sim.color(i)));
             window.draw(dot);
         }
