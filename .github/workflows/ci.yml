@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SFML and doctest
+        run: sudo apt-get update && sudo apt-get install -y libsfml-dev doctest-dev
+      - name: Build (make, viewer + headless) and run the tests
+        run: |
+          make
+          make test
+      - name: Build with CMake and run ctest
+        run: |
+          cmake -S . -B build && cmake --build build -j2
+          ctest --test-dir build --output-on-failure
+      - name: Headless smoke run
+        run: ./PPS --headless --steps 300 --stats stats.csv && test "$(wc -l < stats.csv)" -eq 302
+
+  headless-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build without SFML
+        run: make headless && ./PPS --headless --steps 50
